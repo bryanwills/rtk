@@ -44,6 +44,10 @@ pub const PATTERNS: &[&str] = &[
     // Go tooling
     r"^go\s+(test|build|vet)",
     r"^golangci-lint(\s|$)",
+    // AWS CLI
+    r"^aws\s+",
+    // PostgreSQL
+    r"^psql(\s|$)",
 ];
 
 pub const RULES: &[RtkRule] = &[
@@ -292,6 +296,24 @@ pub const RULES: &[RtkRule] = &[
         rewrite_prefixes: &["golangci-lint", "golangci"],
         category: "Go",
         savings_pct: 85.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    // AWS CLI
+    RtkRule {
+        rtk_cmd: "rtk aws",
+        rewrite_prefixes: &["aws"],
+        category: "Infra",
+        savings_pct: 80.0,
+        subcmd_savings: &[],
+        subcmd_status: &[],
+    },
+    // PostgreSQL
+    RtkRule {
+        rtk_cmd: "rtk psql",
+        rewrite_prefixes: &["psql"],
+        category: "Infra",
+        savings_pct: 75.0,
         subcmd_savings: &[],
         subcmd_status: &[],
     },
