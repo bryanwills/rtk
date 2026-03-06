@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://www.rtk-ai.app/og-image.png" alt="RTK - Rust Token Killer" width="500">
+  <img src="https://avatars.githubusercontent.com/u/258253854?v=4" alt="RTK - Rust Token Killer" width="500">
 </p>
 
 <p align="center">
