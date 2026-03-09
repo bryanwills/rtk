@@ -147,8 +147,17 @@ rtk ruff check                  # Python 린트 (-80%)
 ```bash
 rtk gain                        # 절약 통계
 rtk gain --graph                # ASCII 그래프 (30일)
-rtk discover                    # 놓친 절약 기회 발견
 ```
+
+_Claude Code 전용_ (`~/.claude/projects/` 세션 파일 읽기):
+```bash
+rtk discover                    # 세션 기록에서 놓친 절약 기회 발견
+rtk discover --all --since 7    # 모든 프로젝트, 최근 7일
+rtk learn                       # 오류 기록에서 CLI 수정 학습
+rtk cc-economics                # Claude Code 세션별 토큰 비용 분석
+```
+
+> **출시 예정**: Aider, Cline, Goose 및 셸 히스토리(모든 에이전트)에서 `rtk discover` 지원. [#273](https://github.com/rtk-ai/rtk/issues/273) 팔로우.
 
 ## 문서
 

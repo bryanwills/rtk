@@ -167,8 +167,17 @@ rtk kubectl pods                # Pods compacts
 ```bash
 rtk gain                        # Statistiques d'economies
 rtk gain --graph                # Graphique ASCII (30 jours)
-rtk discover                    # Trouver les economies manquees
 ```
+
+_Claude Code uniquement_ (lit les fichiers de session `~/.claude/projects/`) :
+```bash
+rtk discover                    # Opportunites d'economies manquees dans l'historique
+rtk discover --all --since 7    # Tous les projets, 7 derniers jours
+rtk learn                       # Corrections CLI depuis l'historique d'erreurs
+rtk cc-economics                # Analyse des couts tokens par session Claude Code
+```
+
+> **Bientot** : `rtk discover` pour Aider, Cline, Goose et l'historique shell (tous agents). Suivre [#273](https://github.com/rtk-ai/rtk/issues/273).
 
 ## Configuration
 

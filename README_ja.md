@@ -147,8 +147,17 @@ rtk ruff check                  # Python リント（-80%）
 ```bash
 rtk gain                        # 節約統計
 rtk gain --graph                # ASCII グラフ（30日間）
-rtk discover                    # 見逃した節約機会を発見
 ```
+
+_Claude Code 専用_（`~/.claude/projects/` セッションファイルを読み取ります）：
+```bash
+rtk discover                    # セッション履歴から見逃した節約機会を発見
+rtk discover --all --since 7    # 全プロジェクト、過去7日間
+rtk learn                       # エラー履歴から CLI 修正を学習
+rtk cc-economics                # Claude Code セッション別トークンコスト分析
+```
+
+> **近日公開**：Aider、Cline、Goose、シェル履歴（全エージェント対応）で `rtk discover` をサポート予定。[#273](https://github.com/rtk-ai/rtk/issues/273) をフォロー。
 
 ## ドキュメント
 

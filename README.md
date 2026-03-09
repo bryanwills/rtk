@@ -252,12 +252,17 @@ rtk gain --graph                # ASCII graph (last 30 days)
 rtk gain --history              # Recent command history
 rtk gain --daily                # Day-by-day breakdown
 rtk gain --all --format json    # JSON export for dashboards
-
-rtk discover                    # Find missed savings opportunities
-rtk discover --all --since 7    # All projects, last 7 days
-
-rtk session                     # Show RTK adoption across recent sessions
 ```
+
+_Claude Code only_ (reads `~/.claude/projects/` session files):
+```bash
+rtk discover                    # Find missed savings opportunities in session history
+rtk discover --all --since 7    # All projects, last 7 days
+rtk learn                       # Learn CLI corrections from error history
+rtk cc-economics                # Token cost analysis by Claude Code session
+```
+
+> **Coming soon**: `rtk discover` for Aider, Cline, Goose, and shell history (any agent). Follow [#273](https://github.com/rtk-ai/rtk/issues/273).
 
 ## Global Flags
 

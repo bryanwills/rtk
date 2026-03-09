@@ -155,8 +155,17 @@ rtk kubectl pods                # 紧凑 Pod 列表
 ```bash
 rtk gain                        # 节省统计
 rtk gain --graph                # ASCII 图表（30 天）
-rtk discover                    # 发现遗漏的节省机会
 ```
+
+_仅限 Claude Code_（读取 `~/.claude/projects/` 会话文件）：
+```bash
+rtk discover                    # 发现历史记录中遗漏的节省机会
+rtk discover --all --since 7    # 所有项目，最近 7 天
+rtk learn                       # 从错误历史中学习 CLI 纠正
+rtk cc-economics                # 按 Claude Code 会话分析 token 成本
+```
+
+> **即将推出**：`rtk discover` 支持 Aider、Cline、Goose 及 shell 历史（适用于所有代理）。关注 [#273](https://github.com/rtk-ai/rtk/issues/273)。
 
 ## 文档
 

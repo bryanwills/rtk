@@ -147,8 +147,17 @@ rtk ruff check                  # Lint Python (-80%)
 ```bash
 rtk gain                        # Estadisticas de ahorro
 rtk gain --graph                # Grafico ASCII (30 dias)
-rtk discover                    # Descubrir ahorros perdidos
 ```
+
+_Solo Claude Code_ (lee archivos de sesion de `~/.claude/projects/`):
+```bash
+rtk discover                    # Oportunidades perdidas en el historial de sesiones
+rtk discover --all --since 7    # Todos los proyectos, ultimos 7 dias
+rtk learn                       # Correcciones CLI aprendidas del historial de errores
+rtk cc-economics                # Analisis de costes de tokens por sesion Claude Code
+```
+
+> **Proximamente**: `rtk discover` para Aider, Cline, Goose e historial shell (cualquier agente). Seguir [#273](https://github.com/rtk-ai/rtk/issues/273).
 
 ## Documentacion
 
