@@ -241,7 +241,9 @@ pub fn run_trust(list: bool) -> Result<()> {
 /// Run `rtk untrust` — revoke trust for project-local filters.
 pub fn run_untrust() -> Result<()> {
     let filter_path = Path::new(".rtk/filters.toml");
-    let removed = untrust_filter(filter_path)?;
+    // If file doesn't exist, untrust by canonical path lookup won't work.
+    // Try anyway (file may have been deleted after trust), fallback gracefully.
+    let removed = untrust_filter(filter_path).unwrap_or(false);
     if removed {
         println!("Trust revoked for .rtk/filters.toml");
         println!("Project-local filters will no longer be applied.");
