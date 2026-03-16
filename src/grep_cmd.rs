@@ -77,6 +77,13 @@ pub fn run(
     let mut by_file: HashMap<String, Vec<(usize, String)>> = HashMap::new();
     let mut total = 0;
 
+    // Compile context regex once (instead of per-line in clean_line)
+    let context_re = if context_only {
+        Regex::new(&format!("(?i).{{0,20}}{}.*", regex::escape(pattern))).ok()
+    } else {
+        None
+    };
+
     for line in stdout.lines() {
         let parts: Vec<&str> = line.splitn(3, ':').collect();
 
@@ -91,7 +98,7 @@ pub fn run(
         };
 
         total += 1;
-        let cleaned = clean_line(content, max_line_len, context_only, pattern);
+        let cleaned = clean_line(content, max_line_len, context_re.as_ref(), pattern);
         by_file.entry(file).or_default().push((line_num, cleaned));
     }
 
@@ -143,16 +150,14 @@ pub fn run(
     Ok(())
 }
 
-fn clean_line(line: &str, max_len: usize, context_only: bool, pattern: &str) -> String {
+fn clean_line(line: &str, max_len: usize, context_re: Option<&Regex>, pattern: &str) -> String {
     let trimmed = line.trim();
 
-    if context_only {
-        if let Ok(re) = Regex::new(&format!("(?i).{{0,20}}{}.*", regex::escape(pattern))) {
-            if let Some(m) = re.find(trimmed) {
-                let matched = m.as_str();
-                if matched.len() <= max_len {
-                    return matched.to_string();
-                }
+    if let Some(re) = context_re {
+        if let Some(m) = re.find(trimmed) {
+            let matched = m.as_str();
+            if matched.len() <= max_len {
+                return matched.to_string();
             }
         }
     }
@@ -216,7 +221,7 @@ mod tests {
     #[test]
     fn test_clean_line() {
         let line = "            const result = someFunction();";
-        let cleaned = clean_line(line, 50, false, "result");
+        let cleaned = clean_line(line, 50, None, "result");
         assert!(!cleaned.starts_with(' '));
         assert!(cleaned.len() <= 50);
     }
@@ -240,7 +245,7 @@ mod tests {
     fn test_clean_line_multibyte() {
         // Thai text that exceeds max_len in bytes
         let line = "  สวัสดีครับ นี่คือข้อความที่ยาวมากสำหรับทดสอบ  ";
-        let cleaned = clean_line(line, 20, false, "ครับ");
+        let cleaned = clean_line(line, 20, None, "ครับ");
         // Should not panic
         assert!(!cleaned.is_empty());
     }
@@ -248,7 +253,7 @@ mod tests {
     #[test]
     fn test_clean_line_emoji() {
         let line = "🎉🎊🎈🎁🎂🎄 some text 🎃🎆🎇✨";
-        let cleaned = clean_line(line, 15, false, "text");
+        let cleaned = clean_line(line, 15, None, "text");
         assert!(!cleaned.is_empty());
     }
 
