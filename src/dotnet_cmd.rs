@@ -127,9 +127,7 @@ fn run_dotnet_with_binlog(subcommand: &str, args: &[String], verbose: u8) -> Res
     cmd.env(DOTNET_CLI_UI_LANGUAGE, DOTNET_CLI_UI_LANGUAGE_VALUE);
     cmd.arg(subcommand);
 
-    for arg in
-        build_effective_dotnet_args(subcommand, args, &binlog_path, trx_results_dir.as_deref())
-    {
+    for arg in build_effective_dotnet_args(subcommand, args, &binlog_path) {
         cmd.arg(arg);
     }
 
@@ -271,10 +269,6 @@ fn build_binlog_path(subcommand: &str) -> PathBuf {
     ))
 }
 
-fn build_trx_results_dir() -> PathBuf {
-    std::env::temp_dir().join(format!("rtk_dotnet_testresults_{}", unique_temp_suffix()))
-}
-
 fn unique_temp_suffix() -> String {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -296,7 +290,7 @@ fn resolve_trx_results_dir(subcommand: &str, args: &[String]) -> (Option<PathBuf
         return (Some(user_dir), false);
     }
 
-    (Some(build_trx_results_dir()), true)
+    (None, false)
 }
 
 fn build_format_report_path() -> PathBuf {
@@ -480,7 +474,6 @@ fn build_effective_dotnet_args(
     subcommand: &str,
     args: &[String],
     binlog_path: &Path,
-    trx_results_dir: Option<&Path>,
 ) -> Vec<String> {
     let mut effective = Vec::new();
 
@@ -492,22 +485,8 @@ fn build_effective_dotnet_args(
         effective.push("-v:minimal".to_string());
     }
 
-    if !has_nologo_arg(args) {
+    if subcommand != "test" && !has_nologo_arg(args) {
         effective.push("-nologo".to_string());
-    }
-
-    if subcommand == "test" {
-        if !has_trx_logger_arg(args) {
-            effective.push("--logger".to_string());
-            effective.push("trx".to_string());
-        }
-
-        if !has_results_directory_arg(args) {
-            if let Some(results_dir) = trx_results_dir {
-                effective.push("--results-directory".to_string());
-                effective.push(results_dir.display().to_string());
-            }
-        }
     }
 
     effective.extend(args.iter().cloned());
@@ -536,39 +515,6 @@ fn has_verbosity_arg(args: &[String]) -> bool {
 fn has_nologo_arg(args: &[String]) -> bool {
     args.iter()
         .any(|arg| matches!(arg.to_ascii_lowercase().as_str(), "-nologo" | "/nologo"))
-}
-
-fn has_trx_logger_arg(args: &[String]) -> bool {
-    let mut iter = args.iter().peekable();
-    while let Some(arg) = iter.next() {
-        let lower = arg.to_ascii_lowercase();
-        if lower == "--logger" {
-            if let Some(next) = iter.peek() {
-                let next_lower = next.to_ascii_lowercase();
-                if next_lower == "trx" || next_lower.starts_with("trx;") {
-                    return true;
-                }
-            }
-            continue;
-        }
-
-        for prefix in ["--logger:", "--logger="] {
-            if let Some(value) = lower.strip_prefix(prefix) {
-                if value == "trx" || value.starts_with("trx;") {
-                    return true;
-                }
-            }
-        }
-    }
-
-    false
-}
-
-fn has_results_directory_arg(args: &[String]) -> bool {
-    args.iter().any(|arg| {
-        let lower = arg.to_ascii_lowercase();
-        lower == "--results-directory" || lower.starts_with("--results-directory=")
-    })
 }
 
 fn has_report_arg(args: &[String]) -> bool {
@@ -941,19 +887,9 @@ mod tests {
     use std::fs;
     use std::time::Duration;
 
-    fn build_dotnet_args_for_test(
-        subcommand: &str,
-        args: &[String],
-        with_trx: bool,
-    ) -> Vec<String> {
+    fn build_dotnet_args_for_test(subcommand: &str, args: &[String]) -> Vec<String> {
         let binlog_path = Path::new("/tmp/test.binlog");
-        let trx_results_dir = if with_trx {
-            Some(Path::new("/tmp/test results"))
-        } else {
-            None
-        };
-
-        build_effective_dotnet_args(subcommand, args, binlog_path, trx_results_dir)
+        build_effective_dotnet_args(subcommand, args, binlog_path)
     }
 
     fn trx_with_counts(total: usize, passed: usize, failed: usize) -> String {
@@ -1351,7 +1287,7 @@ mod tests {
             "Release".to_string(),
         ];
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
+        let injected = build_dotnet_args_for_test("test", &args);
         assert!(injected.contains(&"--filter".to_string()));
         assert!(injected.contains(&"FullyQualifiedName~MyTests.Calculator*".to_string()));
         assert!(injected.contains(&"-c".to_string()));
@@ -1367,7 +1303,7 @@ mod tests {
             "net8.0".to_string(),
         ];
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
+        let injected = build_dotnet_args_for_test("test", &args);
         assert!(injected.contains(&"--configuration".to_string()));
         assert!(injected.contains(&"Release".to_string()));
         assert!(injected.contains(&"--framework".to_string()));
@@ -1381,7 +1317,7 @@ mod tests {
             "src/My App.Tests/My App.Tests.csproj".to_string(),
         ];
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
+        let injected = build_dotnet_args_for_test("test", &args);
         assert!(injected.contains(&"--project".to_string()));
         assert!(injected.contains(&"src/My App.Tests/My App.Tests.csproj".to_string()));
     }
@@ -1390,7 +1326,7 @@ mod tests {
     fn test_forwarding_no_build_and_no_restore() {
         let args = vec!["--no-build".to_string(), "--no-restore".to_string()];
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
+        let injected = build_dotnet_args_for_test("test", &args);
         assert!(injected.contains(&"--no-build".to_string()));
         assert!(injected.contains(&"--no-restore".to_string()));
     }
@@ -1399,7 +1335,7 @@ mod tests {
     fn test_user_verbose_override() {
         let args = vec!["-v:detailed".to_string()];
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
+        let injected = build_dotnet_args_for_test("test", &args);
         let verbose_count = injected.iter().filter(|a| a.starts_with("-v:")).count();
         assert_eq!(verbose_count, 1);
         assert!(injected.contains(&"-v:detailed".to_string()));
@@ -1410,7 +1346,7 @@ mod tests {
     fn test_user_long_verbosity_override() {
         let args = vec!["--verbosity".to_string(), "detailed".to_string()];
 
-        let injected = build_dotnet_args_for_test("build", &args, false);
+        let injected = build_dotnet_args_for_test("build", &args);
         assert!(injected.contains(&"--verbosity".to_string()));
         assert!(injected.contains(&"detailed".to_string()));
         assert!(!injected.contains(&"-v:minimal".to_string()));
@@ -1420,8 +1356,20 @@ mod tests {
     fn test_test_subcommand_does_not_inject_minimal_verbosity_by_default() {
         let args = Vec::<String>::new();
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
+        let injected = build_dotnet_args_for_test("test", &args);
         assert!(!injected.contains(&"-v:minimal".to_string()));
+    }
+
+    #[test]
+    fn test_test_subcommand_no_flags_injected() {
+        let args = Vec::<String>::new();
+
+        let injected = build_dotnet_args_for_test("test", &args);
+        assert!(
+            injected.is_empty(),
+            "Expected zero RTK-injected flags for test subcommand, got: {:?}",
+            injected
+        );
     }
 
     #[test]
@@ -1431,47 +1379,49 @@ mod tests {
             "console;verbosity=detailed".to_string(),
         ];
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
+        let injected = build_dotnet_args_for_test("test", &args);
         assert!(injected.contains(&"--logger".to_string()));
         assert!(injected.contains(&"console;verbosity=detailed".to_string()));
-        assert!(injected.iter().any(|a| a == "trx"));
-        assert!(injected.iter().any(|a| a == "--results-directory"));
+        assert!(!injected.iter().any(|a| a == "trx"));
+        assert!(!injected.iter().any(|a| a == "--results-directory"));
     }
 
     #[test]
-    fn test_trx_logger_and_results_directory_injected() {
+    fn test_trx_logger_and_results_directory_not_injected() {
         let args = Vec::<String>::new();
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
-        assert!(injected.contains(&"--logger".to_string()));
-        assert!(injected.contains(&"trx".to_string()));
-        assert!(injected.contains(&"--results-directory".to_string()));
-        assert!(injected.contains(&"/tmp/test results".to_string()));
+        let injected = build_dotnet_args_for_test("test", &args);
+        assert!(!injected.contains(&"--logger".to_string()));
+        assert!(!injected.contains(&"trx".to_string()));
+        assert!(!injected.contains(&"--results-directory".to_string()));
     }
 
     #[test]
-    fn test_user_trx_logger_does_not_duplicate() {
+    fn test_user_trx_logger_passed_through() {
         let args = vec!["--logger".to_string(), "trx".to_string()];
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
+        let injected = build_dotnet_args_for_test("test", &args);
         let trx_logger_count = injected.iter().filter(|a| *a == "trx").count();
         assert_eq!(trx_logger_count, 1);
+        assert!(injected.contains(&"--logger".to_string()));
     }
 
     #[test]
-    fn test_user_results_directory_prevents_extra_injection() {
+    fn test_user_results_directory_passed_through() {
         let args = vec![
             "--results-directory".to_string(),
             "/custom/results".to_string(),
         ];
 
-        let injected = build_dotnet_args_for_test("test", &args, true);
-        assert!(!injected
-            .windows(2)
-            .any(|w| w[0] == "--results-directory" && w[1] == "/tmp/test results"));
+        let injected = build_dotnet_args_for_test("test", &args);
         assert!(injected
             .windows(2)
             .any(|w| w[0] == "--results-directory" && w[1] == "/custom/results"));
+        let results_dir_count = injected
+            .iter()
+            .filter(|a| *a == "--results-directory")
+            .count();
+        assert_eq!(results_dir_count, 1);
     }
 
     #[test]
@@ -1615,18 +1565,6 @@ mod tests {
     }
 
     #[test]
-    fn test_has_results_directory_arg_detects_variants() {
-        let args = vec!["--results-directory".to_string(), "/tmp/trx".to_string()];
-        assert!(has_results_directory_arg(&args));
-
-        let args = vec!["--results-directory=/tmp/trx".to_string()];
-        assert!(has_results_directory_arg(&args));
-
-        let args = vec!["--logger".to_string(), "trx".to_string()];
-        assert!(!has_results_directory_arg(&args));
-    }
-
-    #[test]
     fn test_extract_results_directory_arg_detects_variants() {
         let args = vec!["--results-directory".to_string(), "/tmp/r1".to_string()];
         assert_eq!(
@@ -1654,12 +1592,12 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_trx_results_dir_generated_directory_is_marked_for_cleanup() {
+    fn test_resolve_trx_results_dir_returns_none_without_user_directory() {
         let args = Vec::<String>::new();
 
         let (dir, cleanup) = resolve_trx_results_dir("test", &args);
-        assert!(dir.is_some());
-        assert!(cleanup);
+        assert!(dir.is_none());
+        assert!(!cleanup);
     }
 
     #[test]
