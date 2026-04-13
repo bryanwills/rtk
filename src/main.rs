@@ -132,6 +132,7 @@ Test:
   test           Generic test runner, failures only
   vitest         Vitest compact output
 
+Options:
 {options}";
 
 #[derive(Parser)]
