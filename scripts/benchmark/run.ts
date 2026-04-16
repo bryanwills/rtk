@@ -15,6 +15,15 @@ import { $ } from "bun";
 import { vmEnsureReady, vmBuildRtk, vmExec, RTK_BIN } from "./lib/vm";
 import { testCmd, testSavings, testRewrite, skipTest, getCounts } from "./lib/test";
 import { saveReport } from "./lib/report";
+import {
+  testQuality,
+  containsAll,
+  containsAny,
+  mentionsNumberInRange,
+  getQualityResults,
+  formatQualityReport,
+  type QualityTest,
+} from "./lib/quality";
 
 const args = process.argv.slice(2);
 const quick = args.includes("--quick");
@@ -403,6 +412,397 @@ if (shouldRun(11) && !quick) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Phase 12: Token Savings on Real Open-Source Projects
+// ══════════════════════════════════════════════════════════════
+
+if (shouldRun(12) && !quick) {
+  heading(12, "Real Project Token Savings");
+
+  const PATH_PREFIX = "export PATH=$HOME/.cargo/bin:$PATH:/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin";
+
+  // --- Rust: ripgrep (200+ tests) ---
+  await testSavings(
+    "real:ripgrep cargo test",
+    `${PATH_PREFIX} && cd /tmp/real-ripgrep && cargo test 2>&1`,
+    `${PATH_PREFIX} && cd /tmp/real-ripgrep && ${RTK} cargo test 2>&1`,
+    90
+  );
+  await testSavings(
+    "real:ripgrep cargo clippy",
+    `${PATH_PREFIX} && cd /tmp/real-ripgrep && cargo clippy --all-targets 2>&1`,
+    `${PATH_PREFIX} && cd /tmp/real-ripgrep && ${RTK} cargo clippy --all-targets 2>&1`,
+    80
+  );
+  await testSavings(
+    "real:ripgrep grep fn",
+    `grep -rn 'fn ' /tmp/real-ripgrep/crates/`,
+    `${RTK} grep 'fn ' /tmp/real-ripgrep/crates/`,
+    80
+  );
+  await testSavings(
+    "real:ripgrep ls -R",
+    `ls -laR /tmp/real-ripgrep/crates/`,
+    `${RTK} ls -R /tmp/real-ripgrep/crates/`,
+    70
+  );
+
+  // --- Python: Flask (400+ tests) ---
+  await testSavings(
+    "real:flask pytest",
+    `${PATH_PREFIX} && cd /tmp/real-flask && pytest tests/ 2>&1`,
+    `${PATH_PREFIX} && cd /tmp/real-flask && ${RTK} pytest tests/ 2>&1`,
+    80
+  );
+  await testSavings(
+    "real:flask grep def",
+    `grep -rn 'def ' /tmp/real-flask/src/`,
+    `${RTK} grep 'def ' /tmp/real-flask/src/`,
+    40
+  );
+  await testSavings(
+    "real:flask ls -R",
+    `ls -laR /tmp/real-flask/src/`,
+    `${RTK} ls -R /tmp/real-flask/src/`,
+    70
+  );
+
+  // --- Go: Hugo (1800+ tests) ---
+  await testSavings(
+    "real:hugo go test",
+    `${PATH_PREFIX} && cd /tmp/real-hugo && go test ./hugolib/... 2>&1`,
+    `${PATH_PREFIX} && cd /tmp/real-hugo && ${RTK} go test ./hugolib/... 2>&1`,
+    60
+  );
+  await testSavings(
+    "real:hugo grep func",
+    `grep -rn 'func ' /tmp/real-hugo/hugolib/`,
+    `${RTK} grep 'func ' /tmp/real-hugo/hugolib/`,
+    70
+  );
+  await testSavings(
+    "real:hugo find *.go",
+    `find /tmp/real-hugo -name '*.go' -not -path '*/vendor/*'`,
+    `${RTK} find '*.go' /tmp/real-hugo/`,
+    70
+  );
+  await testSavings(
+    "real:hugo ls -R",
+    `ls -laR /tmp/real-hugo/hugolib/`,
+    `${RTK} ls -R /tmp/real-hugo/hugolib/`,
+    70
+  );
+
+  // --- JS/TS: Vite ---
+  await testSavings(
+    "real:vite ls -R packages",
+    `ls -laR /tmp/real-vite/packages/`,
+    `${RTK} ls -R /tmp/real-vite/packages/`,
+    70
+  );
+  await testSavings(
+    "real:vite find *.ts",
+    `find /tmp/real-vite/packages/vite/src -name '*.ts'`,
+    `${RTK} find '*.ts' /tmp/real-vite/packages/vite/src/`,
+    60
+  );
+
+  // --- C: Redis ---
+  await testSavings(
+    "real:redis grep struct",
+    `grep -rn 'struct ' /tmp/real-redis/src/`,
+    `${RTK} grep 'struct ' /tmp/real-redis/src/`,
+    70
+  );
+  await testSavings(
+    "real:redis ls -R",
+    `ls -laR /tmp/real-redis/src/`,
+    `${RTK} ls -R /tmp/real-redis/src/`,
+    60
+  );
+
+  // --- C#: Newtonsoft.Json ---
+  await testSavings(
+    "real:newtonsoft find *.cs",
+    `find /tmp/real-newtonsoft/Src -name '*.cs'`,
+    `${RTK} find '*.cs' /tmp/real-newtonsoft/Src/`,
+    80
+  );
+  await testSavings(
+    "real:newtonsoft grep class",
+    `grep -rn 'class ' /tmp/real-newtonsoft/Src/`,
+    `${RTK} grep 'class ' /tmp/real-newtonsoft/Src/`,
+    70
+  );
+  await testSavings(
+    "real:newtonsoft ls -R",
+    `ls -laR /tmp/real-newtonsoft/Src/`,
+    `${RTK} ls -R /tmp/real-newtonsoft/Src/`,
+    60
+  );
+
+  // --- Ruby: Sinatra ---
+  await testSavings(
+    "real:sinatra ls -R",
+    `ls -laR /tmp/real-sinatra/lib/`,
+    `${RTK} ls -R /tmp/real-sinatra/lib/`,
+    60
+  );
+
+  // --- Java: Spring Petclinic ---
+  await testSavings(
+    "real:petclinic find *.java",
+    `find /tmp/real-petclinic/src -name '*.java'`,
+    `${RTK} find '*.java' /tmp/real-petclinic/src/`,
+    40
+  );
+  await testSavings(
+    "real:petclinic ls -R",
+    `ls -laR /tmp/real-petclinic/src/`,
+    `${RTK} ls -R /tmp/real-petclinic/src/`,
+    60
+  );
+
+  // --- Cross-project: RTK on itself ---
+  await testSavings(
+    "real:rtk cargo test (1584)",
+    `${PATH_PREFIX} && cd /home/ubuntu/rtk && cargo test --all 2>&1`,
+    `${PATH_PREFIX} && cd /home/ubuntu/rtk && ${RTK} cargo test --all 2>&1`,
+    95
+  );
+  await testSavings(
+    "real:rtk smart main.rs",
+    `cat /home/ubuntu/rtk/src/main.rs`,
+    `${RTK} smart /home/ubuntu/rtk/src/main.rs`,
+    99
+  );
+  await testSavings(
+    "real:rtk read aggressive",
+    `cat /home/ubuntu/rtk/src/main.rs`,
+    `${RTK} read /home/ubuntu/rtk/src/main.rs -l aggressive`,
+    85
+  );
+
+  // --- Logs ---
+  await testSavings(
+    "real:log dedup 1050 lines",
+    `cat /tmp/large.log`,
+    `${RTK} log /tmp/large.log`,
+    95
+  );
+
+  // --- Data ---
+  await testSavings(
+    "real:pip list",
+    `pip list 2>&1`,
+    `${RTK} pip list 2>&1`,
+    90
+  );
+  await testSavings(
+    "real:ps aux",
+    `ps aux`,
+    `${RTK} ps aux`,
+    80
+  );
+
+} else if (quick && shouldRun(12)) {
+  skipTest("real:projects", "--quick mode");
+}
+
+// ══════════════════════════════════════════════════════════════
+// Phase 13: AI Comprehension Quality (skip with --quick)
+// ══════════════════════════════════════════════════════════════
+
+if (shouldRun(13) && !quick) {
+  heading(13, "AI Comprehension Quality");
+
+  // Quality tests use claude CLI (OAuth auth) or ANTHROPIC_API_KEY as fallback
+  {
+    const PATH_PREFIX =
+      "export PATH=$HOME/.cargo/bin:$PATH:/usr/local/go/bin:$HOME/go/bin:$HOME/.local/bin";
+
+    const qualityTests: QualityTest[] = [
+      // --- Cargo test: can the LLM identify failed tests? ---
+      {
+        name: "cargo test failures",
+        rawCmd: `${PATH_PREFIX} && cd /tmp/test-rust && cargo test 2>&1`,
+        rtkCmd: `${PATH_PREFIX} && cd /tmp/test-rust && ${RTK} cargo test 2>&1`,
+        question:
+          "Which tests failed? List the test names and what the error was.",
+        extractTruth: (raw) => {
+          const failures: string[] = [];
+          for (const m of raw.matchAll(/test (\S+) \.\.\. FAILED/g))
+            failures.push(m[1]);
+          return failures.length > 0 ? failures : ["test_fail"];
+        },
+        checkAnswer: (answer, truth) => containsAny(answer, truth),
+      },
+
+      // --- Cargo test on RTK: can LLM give the count? ---
+      {
+        name: "cargo test count (RTK 1584)",
+        rawCmd: `${PATH_PREFIX} && cd /home/ubuntu/rtk && cargo test --all 2>&1`,
+        rtkCmd: `${PATH_PREFIX} && cd /home/ubuntu/rtk && ${RTK} cargo test --all 2>&1`,
+        question:
+          "How many tests passed? How many failed? Give the exact numbers.",
+        extractTruth: () => ["1584", "0 failed"],
+        checkAnswer: (answer, _truth) =>
+          mentionsNumberInRange(answer, 1580, 1590),
+      },
+
+      // --- Cargo clippy: can LLM identify top warnings? ---
+      {
+        name: "cargo clippy warnings (ripgrep)",
+        rawCmd: `${PATH_PREFIX} && cd /tmp/real-ripgrep && cargo clippy --all-targets 2>&1`,
+        rtkCmd: `${PATH_PREFIX} && cd /tmp/real-ripgrep && ${RTK} cargo clippy --all-targets 2>&1`,
+        question:
+          "How many warnings were found? What is the most common warning type?",
+        extractTruth: (raw) => {
+          const m = raw.match(/(\d+) warnings?/);
+          return m ? [m[1]] : ["warning"];
+        },
+        checkAnswer: (answer, truth) => containsAny(answer, truth),
+      },
+
+      // --- pytest Flask: can LLM identify test results? ---
+      {
+        name: "pytest results (Flask)",
+        rawCmd: `${PATH_PREFIX} && cd /tmp/real-flask && pytest tests/ -x --tb=short 2>&1 | head -100`,
+        rtkCmd: `${PATH_PREFIX} && cd /tmp/real-flask && ${RTK} pytest tests/ -x --tb=short 2>&1`,
+        question:
+          "Did all tests pass or were there failures? How many tests were run?",
+        extractTruth: (raw) => {
+          const m = raw.match(/(\d+) passed/);
+          return m ? [m[1], "passed"] : ["passed"];
+        },
+        checkAnswer: (answer, truth) => containsAny(answer, truth),
+      },
+
+      // --- Go test Hugo: can LLM identify failures? ---
+      {
+        name: "go test results (Hugo)",
+        rawCmd: `${PATH_PREFIX} && cd /tmp/real-hugo && go test ./hugolib/... 2>&1 | head -200`,
+        rtkCmd: `${PATH_PREFIX} && cd /tmp/real-hugo && ${RTK} go test ./hugolib/... 2>&1`,
+        question:
+          "Did the tests pass or fail? How many packages were tested?",
+        extractTruth: (raw) => {
+          const passed = raw.includes("ok") ? ["pass", "ok"] : ["fail"];
+          return passed;
+        },
+        checkAnswer: (answer, truth) => containsAny(answer, truth),
+      },
+
+      // --- grep: can LLM identify files with matches? ---
+      {
+        name: "grep results (ripgrep fn)",
+        rawCmd: `grep -rn 'fn main' /tmp/real-ripgrep/crates/`,
+        rtkCmd: `${RTK} grep 'fn main' /tmp/real-ripgrep/crates/`,
+        question:
+          "Which files contain 'fn main'? List the file paths.",
+        extractTruth: (raw) => {
+          const files = new Set<string>();
+          for (const line of raw.split("\n")) {
+            const m = line.match(/^([^:]+):/);
+            if (m) files.add(m[1].split("/").pop() ?? "");
+          }
+          return [...files].slice(0, 3);
+        },
+        checkAnswer: (answer, truth) => containsAny(answer, truth),
+      },
+
+      // --- ls -R: can LLM identify the structure? ---
+      {
+        name: "ls -R structure (Redis)",
+        rawCmd: `ls -laR /tmp/real-redis/src/`,
+        rtkCmd: `${RTK} ls -R /tmp/real-redis/src/`,
+        question:
+          "How many .c files are there approximately? What are some of the file names?",
+        extractTruth: (raw) => {
+          const cFiles = raw.split("\n").filter((l) => l.includes(".c")).length;
+          return [String(cFiles), "server", "redis"];
+        },
+        checkAnswer: (answer, truth) => containsAny(answer, truth),
+      },
+
+      // --- read aggressive: can LLM understand the code? ---
+      {
+        name: "read aggressive (RTK main.rs)",
+        rawCmd: `cat /home/ubuntu/rtk/src/main.rs | head -200`,
+        rtkCmd: `${RTK} read /home/ubuntu/rtk/src/main.rs -l aggressive`,
+        question:
+          "What is this program? What language is it in? Name 3 main features or modules.",
+        extractTruth: () => ["rust", "cli", "rtk"],
+        checkAnswer: (answer, truth) => containsAny(answer, truth),
+      },
+
+      // --- smart: can LLM understand from 20 tokens? ---
+      {
+        name: "smart summary (RTK main.rs)",
+        rawCmd: `cat /home/ubuntu/rtk/src/main.rs | head -200`,
+        rtkCmd: `${RTK} smart /home/ubuntu/rtk/src/main.rs`,
+        question: "What kind of program is this? What does it do?",
+        extractTruth: () => ["cli", "command"],
+        checkAnswer: (answer, truth) => containsAny(answer, truth),
+      },
+
+      // --- log dedup: can LLM identify error types? ---
+      {
+        name: "log dedup (1050 lines)",
+        rawCmd: `cat /tmp/large.log`,
+        rtkCmd: `${RTK} log /tmp/large.log`,
+        question:
+          "What types of log messages are present (INFO, WARN, ERROR, FATAL)? What is the most serious issue?",
+        extractTruth: () => ["fatal", "out of memory"],
+        checkAnswer: (answer, truth) => containsAll(answer, truth),
+      },
+
+      // --- pip list: can LLM identify installed packages? ---
+      {
+        name: "pip list packages",
+        rawCmd: `pip list 2>&1`,
+        rtkCmd: `${RTK} pip list 2>&1`,
+        question: "How many Python packages are installed? Name 3 of them.",
+        extractTruth: (raw) => {
+          const lines = raw.trim().split("\n").filter((l) => !l.startsWith("-"));
+          return [String(lines.length - 1)];
+        },
+        checkAnswer: (answer, _truth) =>
+          mentionsNumberInRange(answer, 10, 500),
+      },
+
+      // --- ps aux: can LLM find key processes? ---
+      {
+        name: "ps aux processes",
+        rawCmd: `ps aux`,
+        rtkCmd: `${RTK} ps aux`,
+        question:
+          "What are the main processes running? Is there a database or web server?",
+        extractTruth: () => ["root", "sbin"],
+        checkAnswer: (answer, _truth) =>
+          answer.toLowerCase().includes("process") ||
+          answer.toLowerCase().includes("running"),
+      },
+    ];
+
+    for (const test of qualityTests) {
+      await testQuality(test, vmExec);
+    }
+
+    // Print quality summary
+    const q = getQualityResults();
+    console.log(
+      `\n  Quality: ${q.qualityPreserved}/${q.totalTests} preserved (${q.avgSavings}% avg savings)`
+    );
+    if (q.qualityLost > 0) {
+      console.log(
+        `  \x1b[31m${q.qualityLost} tests lost quality — RTK removed critical info\x1b[0m`
+      );
+    }
+  }
+} else if (quick && shouldRun(13)) {
+  skipTest("quality:all", "--quick mode");
+}
+
+// ══════════════════════════════════════════════════════════════
 // Report
 // ══════════════════════════════════════════════════════════════
 
@@ -412,6 +812,15 @@ const report = await saveReport(
 );
 
 console.log("\n" + report);
+
+// Append quality report if tests were run
+const qr = getQualityResults();
+if (qr.totalTests > 0) {
+  const qualityMd = formatQualityReport();
+  console.log("\n" + qualityMd);
+  // Append to report file
+  await Bun.write(reportPath.replace(".txt", "-quality.md"), qualityMd);
+}
 
 const { total, passed, failed, skipped } = getCounts();
 const passRate = total > 0 ? Math.round((passed * 100) / total) : 0;

@@ -1,7 +1,9 @@
 #cloud-config
 # RTK Integration Test VM — Ubuntu 24.04
-# Installs all tools needed for comprehensive RTK testing (~200 commands)
-# Usage: multipass launch --name rtk-test --cloud-init scripts/benchmark/cloud-init.yaml --cpus 2 --memory 4G --disk 20G 24.04
+# Installs all tools needed for comprehensive RTK testing (~100 commands)
+# Usage: multipass launch --name rtk-test --cloud-init scripts/benchmark/cloud-init.yaml --cpus 4 --memory 6G --disk 30G 24.04
+#
+# Architecture-aware: detects aarch64 vs x86_64 automatically
 
 package_update: true
 package_upgrade: false
@@ -30,24 +32,69 @@ packages:
   - pkg-config
   - libssl-dev
   - libsqlite3-dev
+  # Additional system tools for TOML filters
+  - iptables
+  - net-tools
+  - sysstat
+  - fail2ban
+  - openssh-server
+  # Ruby ecosystem
+  - ruby
+  - ruby-dev
+  - bundler
+  # Java/Gradle/Maven
+  - default-jdk
+  - maven
+  - gradle
   # Misc
   - hyperfine
   - unzip
   - tree
+  - gcc
+  - g++
+  # PHP
+  - php-cli
+  - composer
 
 runcmd:
+  # ── Detect architecture ──
+  - |
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then
+      GO_ARCH="arm64"
+      KUBECTL_ARCH="arm64"
+      HADOLINT_ARCH="arm64"
+    else
+      GO_ARCH="amd64"
+      KUBECTL_ARCH="amd64"
+      HADOLINT_ARCH="x86_64"
+    fi
+    echo "ARCH=$ARCH GO_ARCH=$GO_ARCH" > /tmp/rtk-arch.env
+
   # ── Rust toolchain ──
   - su - ubuntu -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y'
+  - su - ubuntu -c '$HOME/.cargo/bin/cargo install cargo-nextest 2>/dev/null || true'
 
-  # ── Node.js 22 + package managers ──
+  # ── Node.js 22 + package managers + JS tools ──
   - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   - apt-get install -y nodejs
   - npm install -g pnpm yarn
   - npm install -g eslint prettier typescript
   - npm install -g markdownlint-cli
+  - npm install -g @biomejs/biome
+  - npm install -g oxlint
+  - npm install -g turbo
+  - npm install -g nx
+  - npm install -g vitest jest
+  - npm install -g next
+  - npm install -g prisma
+  # Playwright needs browsers — skip install, just need the CLI
+  - npm install -g @playwright/test || true
 
-  # ── Go 1.22 ──
-  - curl -fsSL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz | tar -C /usr/local -xz
+  # ── Go (arch-aware) ──
+  - |
+    . /tmp/rtk-arch.env
+    curl -fsSL "https://go.dev/dl/go1.22.5.linux-${GO_ARCH}.tar.gz" | tar -C /usr/local -xz
   - echo 'export PATH=$PATH:/usr/local/go/bin:/home/ubuntu/go/bin' >> /home/ubuntu/.bashrc
   - su - ubuntu -c 'export PATH=$PATH:/usr/local/go/bin && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest'
 
@@ -55,7 +102,7 @@ runcmd:
   - pipx install ruff
   - pipx install mypy
   - pipx install poetry
-  - pip3 install --break-system-packages pytest uv pre-commit
+  - pip3 install --break-system-packages pytest uv pre-commit basedpyright
 
   # ── .NET 8 SDK ──
   - |
@@ -71,37 +118,78 @@ runcmd:
     echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
     apt-get update && apt-get install -y terraform
 
+  # ── OpenTofu ──
+  - |
+    curl -fsSL https://get.opentofu.org/install-opentofu.sh | bash -s -- --install-method deb 2>/dev/null || true
+
   # ── Helm ──
   - curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-  # ── Hadolint ──
+  # ── Hadolint (arch-aware) ──
   - |
-    wget -qO /usr/local/bin/hadolint https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-x86_64
-    chmod +x /usr/local/bin/hadolint
+    . /tmp/rtk-arch.env
+    wget -qO /usr/local/bin/hadolint "https://github.com/hadolint/hadolint/releases/latest/download/hadolint-Linux-${HADOLINT_ARCH}" 2>/dev/null || true
+    chmod +x /usr/local/bin/hadolint 2>/dev/null || true
 
   # ── Docker setup ──
   - usermod -aG docker ubuntu
   - systemctl enable docker
   - systemctl start docker
 
-  # ── kubectl (standalone binary) ──
+  # ── kubectl (arch-aware) ──
   - |
-    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+    . /tmp/rtk-arch.env
+    curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${KUBECTL_ARCH}/kubectl"
     install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
-    rm kubectl
+    rm -f kubectl
 
   # ── ansible ──
   - pip3 install --break-system-packages ansible-core
 
-  # ── Mock tools (too heavy to install) ──
+  # ── Ruby tools ──
+  - gem install rspec rubocop rake bundler --no-document 2>/dev/null || true
+
+  # ── just (task runner) ──
+  - |
+    curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin 2>/dev/null || true
+
+  # ── jj (Jujutsu VCS) ──
+  - |
+    . /tmp/rtk-arch.env
+    if [ "$GO_ARCH" = "amd64" ]; then
+      curl -fsSL https://github.com/jj-vcs/jj/releases/latest/download/jj-latest-linux-x86_64.tar.gz | tar xz -C /usr/local/bin jj 2>/dev/null || true
+    fi
+
+  # ── AWS CLI ──
+  - |
+    . /tmp/rtk-arch.env
+    if [ "$GO_ARCH" = "amd64" ]; then
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+    else
+      curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
+    fi
+    cd /tmp && unzip -q awscliv2.zip && ./aws/install 2>/dev/null || true
+    rm -rf /tmp/aws /tmp/awscliv2.zip
+
+  # ── gh CLI ──
+  - |
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+    apt-get update && apt-get install -y gh
+
+  # ── Mock tools (too heavy or proprietary to install for real) ──
   - |
     cat > /usr/local/bin/gcloud << 'MOCK'
     #!/bin/bash
     if [ "$1" = "version" ] || [ "$1" = "--version" ]; then
-      echo "Google Cloud SDK 400.0.0"
-      echo "bq 2.0.80"
-      echo "core 2023.01.01"
-      echo "gsutil 5.17"
+      echo "Google Cloud SDK 500.0.0"
+      echo "alpha 2026.04.01"
+      echo "beta 2026.04.01"
+      echo "bq 2.1.10"
+      echo "bundled-python3-unix 3.12.8"
+      echo "core 2026.04.01"
+      echo "gcloud-crc32c 1.0.0"
+      echo "gsutil 5.31"
     else
       echo "gcloud mock: $*"
     fi
@@ -111,11 +199,13 @@ runcmd:
   - |
     cat > /usr/local/bin/shopify << 'MOCK'
     #!/bin/bash
-    echo "Shopify CLI 3.0.0 (mock)"
+    echo "Shopify CLI 3.70.0 (mock)"
     if [ "$1" = "theme" ] && [ "$2" = "check" ]; then
       echo "Running theme check..."
-      echo "  1 issue found"
-      echo "  [warn] Missing alt text on image"
+      echo "  3 issues found"
+      echo "  [error] templates/index.liquid: Missing required section 'header'"
+      echo "  [warn] assets/theme.css: Missing alt text on image in line 42"
+      echo "  [info] config/settings_schema.json: Consider adding description to setting 'font_size'"
     fi
     MOCK
     chmod +x /usr/local/bin/shopify
@@ -123,11 +213,18 @@ runcmd:
   - |
     cat > /usr/local/bin/pio << 'MOCK'
     #!/bin/bash
-    if [ "$1" = "--version" ]; then echo "PlatformIO Core, version 6.1.0"
+    if [ "$1" = "--version" ]; then echo "PlatformIO Core, version 6.1.15"
     elif [ "$1" = "run" ]; then
-      echo "Processing esp32dev (platform: espressif32; board: esp32dev)"
+      echo "Processing esp32dev (platform: espressif32; board: esp32dev; framework: arduino)"
+      echo "PACKAGES:"
+      echo " - framework-arduinoespressif32 @ 3.20017.0 (3.0.7)"
+      echo " - tool-esptoolpy @ 1.40501.0 (4.5.1)"
+      echo "Compiling .pio/build/esp32dev/src/main.cpp.o"
       echo "Linking .pio/build/esp32dev/firmware.elf"
-      echo "========================= [SUCCESS] ========================="
+      echo "Building .pio/build/esp32dev/firmware.bin"
+      echo "RAM:   [=         ]  12.5% (used 40960 bytes from 327680 bytes)"
+      echo "Flash: [==        ]  24.3% (used 318464 bytes from 1310720 bytes)"
+      echo "========================= [SUCCESS] Took 12.34 seconds ========================="
     fi
     MOCK
     chmod +x /usr/local/bin/pio
@@ -135,8 +232,15 @@ runcmd:
   - |
     cat > /usr/local/bin/quarto << 'MOCK'
     #!/bin/bash
-    if [ "$1" = "--version" ]; then echo "1.3.450"
-    elif [ "$1" = "render" ]; then echo "Rendering document..."; echo "Output created: document.html"
+    if [ "$1" = "--version" ]; then echo "1.5.57"
+    elif [ "$1" = "render" ]; then
+      echo "  Cell 1/5: Running Python code..."
+      echo "  Cell 2/5: Generating plot..."
+      echo "  Cell 3/5: Creating table..."
+      echo "  Cell 4/5: Processing markdown..."
+      echo "  Cell 5/5: Finalizing..."
+      echo "Output created: _output/document.html"
+      echo "Output created: _output/document.pdf"
     fi
     MOCK
     chmod +x /usr/local/bin/quarto
@@ -144,30 +248,154 @@ runcmd:
   - |
     cat > /usr/local/bin/sops << 'MOCK'
     #!/bin/bash
-    if [ "$1" = "--version" ]; then echo "sops 3.7.3"; fi
+    if [ "$1" = "--version" ]; then echo "sops 3.9.4"
+    elif [ "$1" = "-d" ]; then echo '{"database_url": "postgres://user:***@localhost/db", "api_key": "sk-***"}'
+    fi
     MOCK
     chmod +x /usr/local/bin/sops
 
   - |
     cat > /usr/local/bin/swift << 'MOCK'
     #!/bin/bash
-    if [ "$1" = "--version" ]; then echo "Swift version 5.9.2 (swift-5.9.2-RELEASE)"
-    elif [ "$1" = "build" ]; then echo "Compiling Swift module..."; echo "Build complete! (0.42s)"
-    fi
+    case "$1" in
+      --version) echo "Swift version 5.10.1 (swift-5.10.1-RELEASE)" ;;
+      build)
+        echo "Compiling MyApp (14 sources)..."
+        echo "Compiling MyLib (8 sources)..."
+        echo "Linking MyApp"
+        echo "Build complete! (2.34s)" ;;
+      test)
+        echo "Test Suite 'All tests' started at 2026-04-16 10:00:00"
+        echo "Test Suite 'MyAppTests.xctest' started"
+        echo "Test Case '-[MyAppTests.MathTests testAdd]' passed (0.001s)"
+        echo "Test Case '-[MyAppTests.MathTests testSubtract]' passed (0.001s)"
+        echo "Test Case '-[MyAppTests.StringTests testConcat]' failed (0.002s)"
+        echo "  XCTAssertEqual failed: (\"hello\") is not equal to (\"world\")"
+        echo "Test Suite 'MyAppTests.xctest' finished: 2 passed, 1 failed (0.004s)"
+        echo "Test Suite 'All tests' finished: 2 passed, 1 failed (0.005s)"
+        exit 1 ;;
+      package) echo "Resolving dependencies..." ; echo "Resolved 3 packages (0.5s)" ;;
+      *) echo "swift mock: $*" ;;
+    esac
     MOCK
     chmod +x /usr/local/bin/swift
 
+  - |
+    cat > /usr/local/bin/swiftlint << 'MOCK'
+    #!/bin/bash
+    echo "Linting Swift files in current directory..."
+    echo "Sources/App/main.swift:12:1: warning: Line Length Violation: Line should be 120 characters or less; currently it has 145 characters (line_length)"
+    echo "Sources/App/main.swift:25:5: warning: Force Cast Violation: Force casts should be avoided (force_cast)"
+    echo "Sources/App/Models/User.swift:8:1: error: Type Body Length Violation: Type body should span 250 lines or less excluding comments and whitespace: currently spans 312 lines (type_body_length)"
+    echo "Sources/App/Views/Home.swift:15:10: warning: Unused Import Violation: All imported modules should be used (unused_import)"
+    echo "Done linting! Found 3 warnings and 1 error in 4 files."
+    exit 1
+    MOCK
+    chmod +x /usr/local/bin/swiftlint
+
+  - |
+    cat > /usr/local/bin/swiftformat << 'MOCK'
+    #!/bin/bash
+    echo "Running SwiftFormat..."
+    echo "Sources/App/main.swift: formatted (2 changes)"
+    echo "Sources/App/Models/User.swift: formatted (1 change)"
+    echo "Sources/App/Views/Home.swift: already formatted"
+    echo "3 files processed, 2 formatted (3 changes total)"
+    MOCK
+    chmod +x /usr/local/bin/swiftformat
+
+  - |
+    cat > /usr/local/bin/ollama << 'MOCK'
+    #!/bin/bash
+    if [ "$1" = "list" ]; then
+      printf "NAME\tID\tSIZE\tMODIFIED\n"
+      printf "llama3.2:latest\ta1b2c3d4\t4.7 GB\t2 days ago\n"
+      printf "codellama:13b\te5f6a7b8\t7.4 GB\t5 days ago\n"
+      printf "mistral:latest\tc9d0e1f2\t4.1 GB\t1 week ago\n"
+      printf "phi3:mini\tg3h4i5j6\t2.3 GB\t2 weeks ago\n"
+    elif [ "$1" = "ps" ]; then
+      printf "NAME\tID\tSIZE\tPROCESSOR\tUNTIL\n"
+      printf "llama3.2:latest\ta1b2c3d4\t6.2 GB\t100%% GPU\t4 minutes from now\n"
+    elif [ "$1" = "--version" ]; then
+      echo "ollama version 0.6.2"
+    fi
+    MOCK
+    chmod +x /usr/local/bin/ollama
+
+  - |
+    cat > /usr/local/bin/skopeo << 'MOCK'
+    #!/bin/bash
+    if [ "$1" = "--version" ]; then echo "skopeo 1.16.1"
+    elif [ "$1" = "inspect" ]; then
+      echo '{"Name":"docker.io/library/ubuntu","Tag":"latest","Digest":"sha256:abc123","Created":"2026-04-01T00:00:00Z","Architecture":"amd64","Os":"linux","Layers":["sha256:layer1","sha256:layer2","sha256:layer3"]}'
+    elif [ "$1" = "list-tags" ]; then
+      echo '{"Repository":"docker.io/library/ubuntu","Tags":["24.04","22.04","20.04","latest","noble","jammy","focal"]}'
+    fi
+    MOCK
+    chmod +x /usr/local/bin/skopeo
+
+  - |
+    cat > /usr/local/bin/mise << 'MOCK'
+    #!/bin/bash
+    if [ "$1" = "--version" ]; then echo "mise 2026.4.1"
+    elif [ "$1" = "ls" ]; then
+      echo "Tool     Version  Config Source  Requested"
+      echo "node     22.0.0   ~/.tool-versions  22"
+      echo "python   3.12.3   ~/.tool-versions  3.12"
+      echo "ruby     3.3.1    ~/.tool-versions  3.3"
+      echo "go       1.22.5   ~/.tool-versions  1.22"
+    fi
+    MOCK
+    chmod +x /usr/local/bin/mise
+
+  - |
+    cat > /usr/local/bin/gt << 'MOCK'
+    #!/bin/bash
+    if [ "$1" = "--version" ]; then echo "gt 1.4.2"
+    elif [ "$1" = "log" ] || [ "$1" = "ls" ]; then
+      echo "  main"
+      echo "  ├── feat/auth-flow (3 commits, 2 days ago)"
+      echo "  │   └── fix/auth-redirect (1 commit, 1 hour ago)"
+      echo "  ├── feat/dashboard (5 commits, 1 day ago)"
+      echo "  └── chore/deps-update (1 commit, 3 hours ago)"
+    fi
+    MOCK
+    chmod +x /usr/local/bin/gt
+
+  - |
+    cat > /usr/local/bin/psql << 'MOCK'
+    #!/bin/bash
+    if [ "$1" = "--version" ]; then echo "psql (PostgreSQL) 16.3"
+    else
+      echo " id | name       | email              | created_at"
+      echo "----+------------+--------------------+----------------------------"
+      echo "  1 | Alice      | alice@example.com  | 2026-01-15 10:30:00+00"
+      echo "  2 | Bob        | bob@example.com    | 2026-02-20 14:15:00+00"
+      echo "  3 | Charlie    | charlie@test.com   | 2026-03-01 09:00:00+00"
+      echo "(3 rows)"
+    fi
+    MOCK
+    chmod +x /usr/local/bin/psql
+
   # ── Fake test projects ──
 
-  # Node.js project with errors
+  # Node.js project with errors (vitest + eslint + prettier + tsc)
   - |
     su - ubuntu -c '
     mkdir -p /tmp/test-node/src && cd /tmp/test-node
     npm init -y >/dev/null 2>&1
     echo "{\"compilerOptions\":{\"strict\":true,\"noEmit\":true,\"target\":\"ES2020\",\"module\":\"ESNext\",\"moduleResolution\":\"node\"},\"include\":[\"src\"]}" > tsconfig.json
-    echo "const x: number = \"not a number\";\nconst unused = 42;\nfunction greet(name: string): string { return name }\ngreet(123);" > src/index.ts
+    cat > src/index.ts << "TSEOF"
+    const x: number = "not a number";
+    const unused = 42;
+    function greet(name: string): string { return name }
+    greet(123);
+    export function add(a: number, b: number): number { return a + b; }
+    export function multiply(a: number, b: number) { return a * b; }
+    TSEOF
     echo "{\"rules\":{\"no-unused-vars\":\"error\",\"semi\":[\"error\",\"always\"]}}" > .eslintrc.json
     echo "const   x   =    1;const y=2;   const z     =3" > src/ugly.ts
+    pnpm init 2>/dev/null || true
     '
 
   # Python project with errors
@@ -177,21 +405,35 @@ runcmd:
     cat > main.py << "PYEOF"
     import os
     import sys
+    import json
     unused_import = 1
     def add(a: int, b: int) -> str:
         return a + b
     x: int = "hello"
+    class User:
+        def __init__(self, name: str, age: int):
+            self.name = name
+            self.age = age
+        def greet(self) -> str:
+            return f"Hello, {self.name}"
     PYEOF
     cat > test_main.py << "PYEOF"
+    from main import add, User
     def test_pass():
         assert 1 + 1 == 2
     def test_fail():
         assert 1 + 1 == 3, "math is broken"
+    def test_user():
+        u = User("Alice", 30)
+        assert u.greet() == "Hello, Alice"
+    def test_add_types():
+        result = add(1, 2)
+        assert result == 3
     PYEOF
     cat > pyproject.toml << "PYEOF"
     [tool.ruff]
     line-length = 80
-    select = ["E", "F", "W"]
+    select = ["E", "F", "W", "I"]
     [tool.mypy]
     strict = true
     [tool.pytest.ini_options]
@@ -207,19 +449,34 @@ runcmd:
     go mod init test-go 2>/dev/null
     cat > main.go << "GOEOF"
     package main
-    import "fmt"
-    func main() { fmt.Println("hello") }
+    import (
+        "fmt"
+        "strings"
+    )
+    func main() {
+        msg := strings.ToUpper("hello world")
+        fmt.Println(msg)
+    }
     func unused() { var x int; _ = x }
+    func badStyle() string {
+        var s string = "test"
+        return s
+    }
     GOEOF
     cat > main_test.go << "GOEOF"
     package main
     import "testing"
     func TestPass(t *testing.T) { if 1+1 != 2 { t.Fatal("math") } }
-    func TestFail(t *testing.T) { t.Fatal("expected failure") }
+    func TestPass2(t *testing.T) { if 2*3 != 6 { t.Fatal("math2") } }
+    func TestFail(t *testing.T) { t.Fatal("expected failure for testing") }
+    func TestBadStyle(t *testing.T) {
+        result := badStyle()
+        if result != "test" { t.Fatalf("expected test, got %s", result) }
+    }
     GOEOF
     '
 
-  # Rust project with errors
+  # Rust project with errors and warnings
   - |
     su - ubuntu -c '
     export PATH=$HOME/.cargo/bin:$PATH
@@ -227,76 +484,53 @@ runcmd:
     cargo init --name test-rust 2>/dev/null
     cat > src/main.rs << "RSEOF"
     fn main() {
-        let x = vec![1, 2, 3];
+        let x = vec![1, 2, 3, 4, 5];
         let _y = x.iter().map(|i| i.clone()).collect::<Vec<_>>();
-        println!("hello");
+        let _unused = 42;
+        println!("hello from test-rust");
+    }
+    fn unused_function() -> String {
+        "this is never called".to_string()
     }
     #[cfg(test)]
     mod tests {
-        #[test] fn test_pass() { assert_eq!(1 + 1, 2); }
-        #[test] fn test_fail() { assert_eq!(1 + 1, 3); }
+        #[test] fn test_pass_1() { assert_eq!(1 + 1, 2); }
+        #[test] fn test_pass_2() { assert_eq!(2 + 2, 4); }
+        #[test] fn test_pass_3() { assert_eq!(3 * 3, 9); }
+        #[test] fn test_pass_4() { assert_eq!(10 / 2, 5); }
+        #[test] fn test_fail() { assert_eq!(1 + 1, 3, "intentional failure"); }
+        #[test] fn test_fail_2() { panic!("another intentional failure"); }
     }
     RSEOF
+    cargo build 2>/dev/null || true
     '
 
-  # Dockerfiles for hadolint
+  # Ruby project with rspec + rubocop
   - |
     su - ubuntu -c '
-    cat > /tmp/Dockerfile.bad << "DEOF"
-    FROM ubuntu:latest
-    RUN apt-get update && apt-get install -y curl wget git
-    RUN cd /tmp && wget http://example.com/script.sh && bash script.sh
-    EXPOSE 80 443 8080
-    DEOF
+    mkdir -p /tmp/test-ruby/spec && cd /tmp/test-ruby
+    cat > app.rb << "RBEOF"
+    class Calculator
+      def add(a, b)
+        a + b
+      end
+      def divide(a, b)
+        a / b
+      end
+    end
+    RBEOF
+    cat > spec/calculator_spec.rb << "RBEOF"
+    require_relative "../app"
+    RSpec.describe Calculator do
+      it "adds two numbers" do
+        expect(Calculator.new.add(1, 2)).to eq(3)
+      end
+      it "fails intentionally" do
+        expect(Calculator.new.add(1, 2)).to eq(4)
+      end
+    end
+    RBEOF
     '
-
-  # Shell/YAML/Markdown test files
-  - |
-    su - ubuntu -c '
-    printf "#!/bin/bash\necho \$foo\nls *.txt\ncd \$(pwd)\n[ -f file ] && rm file\n" > /tmp/test.sh
-    printf "foo: bar\nbaz:  qux\nlist:\n - item1\n -  item2\ntruthy: yes\n" > /tmp/test.yaml
-    printf "#Header without space\nSome text\n\n* List item\n+ Mixed markers\n" > /tmp/test.md
-    '
-
-  # Git repo for testing
-  - |
-    su - ubuntu -c '
-    mkdir -p /tmp/test-git && cd /tmp/test-git
-    git init && git config user.email "test@rtk.dev" && git config user.name "RTK Test"
-    for i in $(seq 1 20); do echo "line $i" >> file.txt && git add file.txt && git commit -m "feat: commit number $i"; done
-    echo "modified" >> file.txt && echo "new file" > new.txt
-    '
-
-  # Large log file for dedup testing
-  - |
-    su - ubuntu -c '
-    for i in $(seq 1 500); do
-      printf "[2026-03-25 10:00:00] INFO Starting service...\n[2026-03-25 10:00:01] WARN Connection timeout\n[2026-03-25 10:00:01] ERROR Failed to connect: refused\n"
-    done > /tmp/large.log
-    for i in $(seq 1 50); do echo "[2026-03-25 10:05:00] FATAL Out of memory"; done >> /tmp/large.log
-    '
-
-  # .env file
-  - |
-    su - ubuntu -c '
-    printf "DATABASE_URL=postgres://user:pass@localhost:5432/db\nAPI_KEY=sk-1234567890abcdef\nSECRET_TOKEN=ghp_xxxx\nNODE_ENV=production\nPORT=3000\n" > /tmp/.env
-    '
-
-  # Makefile
-  - |
-    su - ubuntu -c '
-    printf ".PHONY: all test\nall:\n\t@echo Building...\n\t@echo Build complete\ntest:\n\t@echo Running tests...\n\t@echo 2 tests passed\n" > /tmp/Makefile
-    '
-
-  # Terraform project
-  - |
-    su - ubuntu -c '
-    mkdir -p /tmp/test-terraform && cd /tmp/test-terraform
-    printf "terraform {\n  required_version = \">= 1.0\"\n}\nresource \"null_resource\" \"test\" {\n  triggers = { always = timestamp() }\n}\noutput \"test\" { value = \"hello\" }\n" > main.tf
-    '
-
-  # Helm chart
-  - su - ubuntu -c 'mkdir -p /tmp/test-helm && cd /tmp/test-helm && helm create test-chart 2>/dev/null || true'
 
   # .NET project
   - |
@@ -306,6 +540,219 @@ runcmd:
     mkdir -p /tmp/test-dotnet && cd /tmp/test-dotnet
     dotnet new console -n TestApp --force 2>/dev/null || true
     '
+
+  # Dockerfiles for hadolint
+  - |
+    su - ubuntu -c '
+    cat > /tmp/Dockerfile.bad << "DEOF"
+    FROM ubuntu:latest
+    RUN apt-get update && apt-get install -y curl wget git vim nano
+    RUN cd /tmp && wget http://example.com/script.sh && bash script.sh
+    RUN pip install flask django requests
+    EXPOSE 80 443 8080
+    COPY . /app
+    WORKDIR /app
+    CMD ["python", "app.py"]
+    DEOF
+    '
+
+  # Shell/YAML/Markdown test files
+  - |
+    su - ubuntu -c '
+    cat > /tmp/test.sh << "SHEOF"
+    #!/bin/bash
+    echo $foo
+    ls *.txt
+    cd $(pwd)
+    [ -f file ] && rm file
+    for i in 1 2 3; do
+      echo $i
+    done
+    cat /etc/passwd | grep root
+    SHEOF
+    printf "foo: bar\nbaz:  qux\nlist:\n - item1\n -  item2\ntruthy: yes\npassword: secret123\n" > /tmp/test.yaml
+    printf "#Header without space\nSome text with [broken link]()\n\n* List item\n+ Mixed markers\n- Another item\n\n## No blank line before heading\nParagraph\n" > /tmp/test.md
+    echo "{\"name\":\"test\",\"version\":\"1.0\",\"dependencies\":{\"express\":\"4.18\",\"lodash\":\"4.17\",\"axios\":\"1.6\"},\"scripts\":{\"start\":\"node index.js\",\"test\":\"jest\",\"build\":\"tsc\"}}" > /tmp/test.json
+    '
+
+  # Git repo with rich history (30 commits with bodies)
+  - |
+    su - ubuntu -c '
+    mkdir -p /tmp/test-git && cd /tmp/test-git
+    git init && git config user.email "test@rtk.dev" && git config user.name "RTK Test"
+    for i in $(seq 1 30); do
+      echo "line $i content for feature $i" >> file.txt
+      scope=$( [ $((i%3)) -eq 0 ] && echo "core" || ( [ $((i%3)) -eq 1 ] && echo "ui" || echo "api" ) )
+      git add file.txt
+      git commit -m "feat($scope): implement feature number $i - closes #$i"
+    done
+    echo "modified content for testing diff" >> file.txt
+    echo "brand new file" > new.txt
+    echo "another new file with content" > another.txt
+    git add new.txt
+    git branch feature/auth
+    git branch fix/login-bug
+    '
+
+  # Large log file for dedup testing (more varied)
+  - |
+    su - ubuntu -c '
+    for i in $(seq 1 200); do
+      printf "[2026-04-16 10:00:%02d] INFO  Starting service on port 8080...\n" $((i%60))
+      printf "[2026-04-16 10:00:%02d] INFO  Connected to database postgres://localhost:5432/app\n" $((i%60))
+      printf "[2026-04-16 10:00:%02d] WARN  Connection pool exhausted, retry=%d backoff=100ms\n" $((i%60)) $i
+      printf "[2026-04-16 10:00:%02d] ERROR Failed to process request: connection refused (attempt %d/3)\n" $((i%60)) $((i%3+1))
+    done > /tmp/large.log
+    for i in $(seq 1 50); do echo "[2026-04-16 10:05:00] FATAL Out of memory: heap allocation failed (requested 256MB, available 12MB)"; done >> /tmp/large.log
+    for i in $(seq 1 100); do echo "[2026-04-16 10:06:$((i%60))] DEBUG Request processed in ${i}ms path=/api/v1/users method=GET status=200"; done >> /tmp/large.log
+    '
+
+  # .env file
+  - |
+    su - ubuntu -c '
+    printf "DATABASE_URL=postgres://user:pass@localhost:5432/db\nAPI_KEY=sk-1234567890abcdef\nSECRET_TOKEN=ghp_xxxx\nNODE_ENV=production\nPORT=3000\nREDIS_URL=redis://localhost:6379\n" > /tmp/.env
+    '
+
+  # Makefile (bigger)
+  - |
+    su - ubuntu -c '
+    cat > /tmp/Makefile << "MKEOF"
+    .PHONY: all test clean build lint
+    all: build test
+    build:
+    	@echo "Compiling main module..."
+    	@echo "Compiling auth module..."
+    	@echo "Compiling database module..."
+    	@echo "Compiling api module..."
+    	@echo "Linking..."
+    	@echo "Build complete (4 modules compiled)"
+    test:
+    	@echo "Running unit tests..."
+    	@echo "  test_auth: PASS"
+    	@echo "  test_database: PASS"
+    	@echo "  test_api: PASS"
+    	@echo "  test_integration: FAIL"
+    	@echo "4 tests run, 3 passed, 1 failed"
+    lint:
+    	@echo "Linting 12 files..."
+    	@echo "  2 warnings found"
+    clean:
+    	@echo "Cleaning build artifacts..."
+    	@echo "Removed 15 files"
+    MKEOF
+    '
+
+  # Terraform project
+  - |
+    su - ubuntu -c '
+    mkdir -p /tmp/test-terraform && cd /tmp/test-terraform
+    cat > main.tf << "TFEOF"
+    terraform {
+      required_version = ">= 1.0"
+      required_providers {
+        aws = { source = "hashicorp/aws", version = "~> 5.0" }
+      }
+    }
+    provider "aws" { region = "eu-west-1" }
+    resource "aws_instance" "web" {
+      ami           = "ami-0abcdef1234567890"
+      instance_type = "t3.micro"
+      tags = { Name = "web-server" }
+    }
+    resource "aws_s3_bucket" "data" {
+      bucket = "my-data-bucket"
+    }
+    output "instance_ip" { value = aws_instance.web.public_ip }
+    TFEOF
+    '
+
+  # Helm chart
+  - su - ubuntu -c 'mkdir -p /tmp/test-helm && cd /tmp/test-helm && helm create test-chart 2>/dev/null || true'
+
+  # Justfile for just runner
+  - |
+    su - ubuntu -c '
+    cat > /tmp/justfile << "JEOF"
+    default: build test
+
+    build:
+        @echo "Building project..."
+        @echo "Done."
+
+    test:
+        @echo "Running tests..."
+        @echo "All tests passed."
+
+    lint:
+        @echo "Linting..."
+    JEOF
+    '
+
+  # ══════════════════════════════════════════════════════════
+  # Real open-source projects for token savings benchmarks
+  # Each project covers a developer profile/language ecosystem
+  # ══════════════════════════════════════════════════════════
+
+  # ── Rust: ripgrep (CLI, 200+ tests) ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/BurntSushi/ripgrep.git /tmp/real-ripgrep 2>/dev/null'
+  - su - ubuntu -c 'export PATH=$HOME/.cargo/bin:$PATH && cd /tmp/real-ripgrep && cargo build 2>/dev/null'
+
+  # ── Rust data: Polars (DataFrame engine, 1000+ tests) ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/pola-rs/polars.git /tmp/real-polars 2>/dev/null'
+
+  # ── Python backend: Flask (400+ tests) ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/pallets/flask.git /tmp/real-flask 2>/dev/null'
+  - su - ubuntu -c 'pip install --user --break-system-packages -e "/tmp/real-flask[dev]" 2>/dev/null'
+
+  # ── Python data engineering: dbt-core ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/dbt-labs/dbt-core.git /tmp/real-dbt 2>/dev/null'
+
+  # ── Python ML/Data Science: scikit-learn ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/scikit-learn/scikit-learn.git /tmp/real-sklearn 2>/dev/null'
+
+  # ── Go backend: Hugo (static site, 1800+ tests) ──
+  - |
+    su - ubuntu -c '
+    export PATH=$PATH:/usr/local/go/bin
+    git clone --depth 1 https://github.com/gohugoio/hugo.git /tmp/real-hugo 2>/dev/null
+    cd /tmp/real-hugo && go mod download 2>/dev/null
+    '
+
+  # ── JS/TS build tools: Vite (500+ tests) ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/vitejs/vite.git /tmp/real-vite 2>/dev/null'
+  - su - ubuntu -c 'cd /tmp/real-vite && pnpm install --no-frozen-lockfile 2>/dev/null'
+
+  # ── Vue frontend: vuejs/core ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/vuejs/core.git /tmp/real-vue 2>/dev/null'
+  - su - ubuntu -c 'cd /tmp/real-vue && pnpm install --no-frozen-lockfile 2>/dev/null || true'
+
+  # ── React/Next: T3 stack (fullstack TS) ──
+  - |
+    su - ubuntu -c '
+    mkdir -p /tmp/real-t3 && cd /tmp/real-t3
+    pnpm create t3-app@latest my-app --noGit --CI --tailwind --trpc --nextAuth --prisma --appRouter 2>/dev/null || true
+    '
+
+  # ── C systems: Redis ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/redis/redis.git /tmp/real-redis 2>/dev/null'
+  - su - ubuntu -c 'cd /tmp/real-redis && make -j$(nproc) 2>/dev/null'
+
+  # ── C#/.NET: Newtonsoft.Json ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/JamesNK/Newtonsoft.Json.git /tmp/real-newtonsoft 2>/dev/null'
+
+  # ── Java Spring: spring-petclinic ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/spring-projects/spring-petclinic.git /tmp/real-petclinic 2>/dev/null'
+
+  # ── Ruby: Sinatra (web framework) ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/sinatra/sinatra.git /tmp/real-sinatra 2>/dev/null'
+  - su - ubuntu -c 'cd /tmp/real-sinatra && bundle install 2>/dev/null || true'
+
+  # ── PHP: Laravel framework ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/laravel/framework.git /tmp/real-laravel 2>/dev/null'
+  - su - ubuntu -c 'cd /tmp/real-laravel && composer install --no-interaction 2>/dev/null || true'
+
+  # ── Kotlin: Ktor (web framework) ──
+  - su - ubuntu -c 'git clone --depth 1 https://github.com/ktorio/ktor.git /tmp/real-ktor 2>/dev/null'
 
   # Signal completion
   - touch /home/ubuntu/.cloud-init-complete
