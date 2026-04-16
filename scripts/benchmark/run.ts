@@ -3,12 +3,19 @@
  * RTK Full Integration Test Suite — Multipass VM
  *
  * Usage:
- *   bun run scripts/benchmark/run.ts           # Full suite
- *   bun run scripts/benchmark/run.ts --quick   # Skip slow phases (perf, concurrency)
- *   bun run scripts/benchmark/run.ts --phase 3 # Run specific phase only
+ *   bun run scripts/benchmark/run.ts                    # Full suite
+ *   bun run scripts/benchmark/run.ts --quick            # Skip slow phases
+ *   bun run scripts/benchmark/run.ts --phase 3          # Run specific phase only
+ *   bun run scripts/benchmark/run.ts --phase 13         # AI quality tests only
+ *   bun run scripts/benchmark/run.ts --llm claude       # Force Claude CLI for quality tests
+ *   bun run scripts/benchmark/run.ts --llm gemini       # Force Gemini CLI
+ *   bun run scripts/benchmark/run.ts --llm codex        # Force Codex CLI
+ *   bun run scripts/benchmark/run.ts --llm ollama       # Force local Ollama
+ *   bun run scripts/benchmark/run.ts --llm auto         # Auto-detect (default)
  *
  * Prerequisites:
  *   brew install multipass
+ *   At least one LLM CLI for Phase 13: claude, gemini, codex, or ollama
  */
 
 import { $ } from "bun";
@@ -22,7 +29,10 @@ import {
   mentionsNumberInRange,
   getQualityResults,
   formatQualityReport,
+  setLLMBackend,
+  getActiveBackends,
   type QualityTest,
+  type LLMBackend,
 } from "./lib/quality";
 
 const args = process.argv.slice(2);
@@ -35,6 +45,11 @@ if (args.includes("--phase") && phaseOnly === null) {
   console.error("Error: --phase requires a number (e.g. --phase 3)");
   process.exit(1);
 }
+const llmArg = args.includes("--llm")
+  ? args[args.indexOf("--llm") + 1] as LLMBackend
+  : "auto";
+if (llmArg !== "auto") setLLMBackend(llmArg);
+
 const reportPath = args.includes("--report")
   ? args[args.indexOf("--report") + 1]
   : `${new URL("../../", import.meta.url).pathname.replace(/\/$/, "")}/benchmark-report.txt`;

@@ -5,7 +5,13 @@
  * by asking an LLM the same questions on raw vs filtered output
  * and comparing answers against ground truth.
  *
- * Requires: ANTHROPIC_API_KEY environment variable
+ * Supported LLM backends (auto-detected, no API keys needed):
+ *   - claude CLI  (OAuth via Claude Code)
+ *   - gemini CLI  (Google auth)
+ *   - codex CLI   (OpenAI auth)
+ *   - ollama      (local, zero auth)
+ *
+ * Use setLLMBackend() or --llm flag to force a specific backend.
  */
 
 export interface QualityTest {
@@ -36,62 +42,138 @@ export interface QualityResult {
 
 const results: QualityResult[] = [];
 
+// ── LLM Backend System ──
+
+export type LLMBackend = "claude" | "gemini" | "codex" | "ollama" | "auto";
+
+let forcedBackend: LLMBackend = "auto";
+let detectedBackends: string[] | null = null;
+
+/** Force a specific LLM backend. Called from run.ts based on --llm flag. */
+export function setLLMBackend(backend: LLMBackend) {
+  forcedBackend = backend;
+}
+
+/** Detect which LLM CLIs are available on the host machine. */
+async function detectBackends(): Promise<string[]> {
+  if (detectedBackends) return detectedBackends;
+  const { $ } = await import("bun");
+  const backends: string[] = [];
+
+  for (const [name, cmd] of [
+    ["claude", "claude --version"],
+    ["gemini", "gemini --version"],
+    ["codex", "codex --version"],
+    ["ollama", "ollama --version"],
+  ] as const) {
+    try {
+      const r = await $`${cmd.split(" ")[0]} ${cmd.split(" ").slice(1)}`.quiet().nothrow().timeout(5_000);
+      if (r.exitCode === 0) backends.push(name);
+    } catch { /* not installed */ }
+  }
+
+  detectedBackends = backends;
+  console.log(`  LLM backends detected: ${backends.join(", ") || "none"}`);
+  return backends;
+}
+
+/** Get the list of backends to use for quality tests. */
+export async function getActiveBackends(): Promise<string[]> {
+  const available = await detectBackends();
+  if (forcedBackend !== "auto") {
+    if (available.includes(forcedBackend)) return [forcedBackend];
+    console.log(`  WARNING: --llm=${forcedBackend} not available, falling back to auto`);
+  }
+  return available;
+}
+
 /**
- * Ask Claude a question about command output.
- *
- * Strategy (in order):
- * 1. `claude` CLI with --print (uses Claude Code's OAuth — no API key needed)
- * 2. ANTHROPIC_API_KEY direct API call (fallback)
- * 3. Skip if neither available
+ * Ask a question to a specific LLM backend via its CLI.
+ * All CLIs support piping a prompt and getting text back.
+ */
+async function askBackend(
+  backend: string,
+  prompt: string
+): Promise<string> {
+  const { $ } = await import("bun");
+  // Write prompt to a temp file to avoid shell escaping issues
+  const tmpFile = `/tmp/rtk-quality-prompt-${Date.now()}.txt`;
+  await Bun.write(tmpFile, prompt);
+
+  try {
+    let result;
+    switch (backend) {
+      case "claude":
+        result = await $`cat ${tmpFile} | claude -p --model haiku --max-turns 1 --no-session-persistence`
+          .quiet().nothrow().timeout(60_000);
+        break;
+      case "gemini":
+        result = await $`cat ${tmpFile} | gemini -p --model gemini-2.0-flash`
+          .quiet().nothrow().timeout(60_000);
+        break;
+      case "codex":
+        result = await $`cat ${tmpFile} | codex -p --model o4-mini`
+          .quiet().nothrow().timeout(60_000);
+        break;
+      case "ollama":
+        result = await $`ollama run llama3.2 < ${tmpFile}`
+          .quiet().nothrow().timeout(120_000);
+        break;
+      default:
+        return `[unknown backend: ${backend}]`;
+    }
+
+    // Clean up temp file
+    await $`rm -f ${tmpFile}`.quiet().nothrow();
+
+    if (result.exitCode === 0 && result.stdout.toString().trim()) {
+      return result.stdout.toString().trim();
+    }
+    return `[${backend} returned exit ${result.exitCode}]`;
+  } catch (e) {
+    await $`rm -f ${tmpFile}`.quiet().nothrow();
+    return `[${backend} error: ${e}]`;
+  }
+}
+
+/**
+ * Ask an LLM a question about command output.
+ * Tries each active backend and returns the first successful response.
  */
 async function askLLM(output: string, question: string): Promise<string> {
   // Cap output to ~4000 tokens worth (~16K chars) to avoid blowing budget
   const cappedOutput = output.slice(0, 16_000);
   const prompt = `Here is the output of a development command:\n\n\`\`\`\n${cappedOutput}\n\`\`\`\n\n${question}\n\nAnswer concisely in 1-3 sentences. Only state facts from the output above.`;
 
-  // Strategy 1: Claude CLI (uses existing Claude Code auth, no API key needed)
-  try {
-    const { $ } = await import("bun");
-    const result = await $`echo ${prompt} | claude -p --model haiku --max-turns 1 --no-session-persistence 2>/dev/null`
-      .quiet()
-      .nothrow()
-      .timeout(30_000);
-    if (result.exitCode === 0 && result.stdout.toString().trim()) {
-      return result.stdout.toString().trim();
-    }
-  } catch {
-    // Claude CLI not available, fall through
-  }
+  const backends = await getActiveBackends();
+  if (backends.length === 0) return "[SKIP: no LLM backend available]";
 
-  // Strategy 2: Anthropic API direct
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return "[SKIP: no claude CLI or ANTHROPIC_API_KEY]";
+  // Use first available backend
+  return askBackend(backends[0], prompt);
+}
 
-  const body = JSON.stringify({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 300,
-    messages: [{ role: "user", content: prompt }],
-  });
+/**
+ * Ask ALL active backends the same question and return results per backend.
+ * Used when --llm=all to compare comprehension across models.
+ */
+export async function askAllBackends(
+  output: string,
+  question: string
+): Promise<Record<string, string>> {
+  const cappedOutput = output.slice(0, 16_000);
+  const prompt = `Here is the output of a development command:\n\n\`\`\`\n${cappedOutput}\n\`\`\`\n\n${question}\n\nAnswer concisely in 1-3 sentences. Only state facts from the output above.`;
 
-  try {
-    const resp = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body,
-    });
-    const data = (await resp.json()) as {
-      content?: { text?: string }[];
-      error?: { message?: string };
-    };
-    if (data.error) return `[API error: ${data.error.message}]`;
-    return data.content?.[0]?.text ?? "[empty response]";
-  } catch (e) {
-    return `[fetch error: ${e}]`;
-  }
+  const backends = await getActiveBackends();
+  const results: Record<string, string> = {};
+
+  // Run all backends in parallel
+  await Promise.all(
+    backends.map(async (b) => {
+      results[b] = await askBackend(b, prompt);
+    })
+  );
+
+  return results;
 }
 
 function countWords(text: string): number {
@@ -211,9 +293,11 @@ export function formatQualityReport(): string {
   const { results: res, totalTests, qualityPreserved, qualityLost, avgSavings } =
     getQualityResults();
 
+  const backends = detectedBackends ?? [];
   let md = `## AI Comprehension Quality Benchmark\n\n`;
-  md += `**Model**: claude-haiku-4-5 (cheapest, fastest — if Haiku understands it, any model will)\n`;
-  md += `**Method**: Same factual question asked on raw output vs RTK filtered output\n\n`;
+  md += `**LLM backends**: ${backends.join(", ") || "none"} (forced: ${forcedBackend})\n`;
+  md += `**Method**: Same factual question asked on raw output vs RTK filtered output\n`;
+  md += `**Pass criteria**: LLM answers correctly from filtered output (fewer tokens, same comprehension)\n\n`;
   md += `| Test | Raw tokens | RTK tokens | Savings | Raw answer | RTK answer | Quality |\n`;
   md += `|------|----------:|----------:|--------:|:----------:|:----------:|:-------:|\n`;
 
