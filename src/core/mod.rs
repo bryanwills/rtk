@@ -13,6 +13,7 @@ pub mod tee;
 pub mod telemetry;
 pub mod telemetry_cmd;
 pub mod toml_filter;
+pub mod toon;
 pub mod tracking;
 pub mod utils;
 pub mod verifier;
